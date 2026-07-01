@@ -1,0 +1,80 @@
+# maxed-mcp
+
+> An MCP (Model Context Protocol) server that exposes the open-source accounting
+> suite's deterministic tools to AI agents: bank-statement and OFX parsing,
+> accounting-document classification, CPA workpaper-spec validation, exact money
+> math, and webhook HMAC verification. Every tool returns structured JSON and a
+> uniform error envelope. Deterministic and auditable; never generative, never
+> faked.
+
+Run: `maxed-mcp` (or `python -m maxed_mcp`). Transport: stdio. SDK: `mcp` (the
+official Python MCP SDK), FastMCP server.
+
+## Tools
+
+- list_capabilities() -> object
+  - Lists each tool and whether its backend is installed on this host. Call first.
+  - Returns: { ok, server, version, tools: [{ name, backend, available, install?, summary }] }
+
+- normalize_bank_statement(content: string, fmt?: string, default_currency="USD", dedup=true, invert_amounts=false) -> object
+  - Parse a raw statement (CSV, OFX/QFX, MT940, CAMT.053/052, QIF, text) into normalized transactions.
+  - fmt is auto-detected when omitted; force with one of: csv, ofx, text, mt940, camt053, camt052, qif.
+  - Returns: { ok: true, statement: { ...normalized statement, transactions: [...] } } or an error envelope.
+  - Backend: statement-normalizer CLI. Install: pip install statement-normalizer.
+
+- normalize_ofx(content: string, fmt="auto", invert_amounts=false) -> object
+  - Parse an OFX/QFX or CSV bank export into normalized transactions. fmt: auto | ofx | csv.
+  - Returns: { ok: true, statement: {...} } or an error envelope.
+  - Backend: ofx-normalizer `ofxnorm` (Go). Install: go install github.com/maxed-oss/ofx-normalizer/cmd/ofxnorm@latest.
+  - Fallback: normalize_bank_statement also parses OFX/QFX.
+
+- classify_document(text: string, min_score=1.0) -> object
+  - Classify accounting document text into a fixed taxonomy.
+  - Labels: w2, form_1099, invoice, bank_statement, receipt, unknown (honest abstention).
+  - Returns: { ok: true, doc_id, label, confidence, rationale } or an error envelope.
+  - Backend: doc-classifier-kit CLI. Install: pip install doc-classifier-kit.
+
+- validate_workpaper(document: object, schema: string) -> object
+  - Validate a JSON document against a cpa-workpaper-spec schema.
+  - schema: engagement | workpaper | close-checklist | tax-prep | engagement-letter | request-list-item.
+  - Returns: { ok, valid, schema, document, errors: [...] } or an error envelope.
+  - Backend: cpa-workpaper-spec validator. Set CPA_WORKPAPER_SPEC_DIR to a checkout.
+
+- money_allocate(minor_units: int, currency: string, ratios?: int[], parts?: int, exponent?: int) -> object
+  - Split an amount (integer minor units, e.g. cents) across ratios or evenly into parts.
+  - Largest-remainder method: parts always sum back exactly; no lost or invented minor units.
+  - currency: USD, EUR, GBP, JPY, BHD, or any code plus an explicit exponent for a custom currency.
+  - Returns: { ok, op, input, ratios, parts: [{minor_units, currency, exponent, formatted}], sum_check }.
+  - Backend: money-rs semantics, in-process (always available).
+
+- money_apply_rate(minor_units: int, currency: string, rate: number, rounding="half_even", exponent?: int) -> object
+  - Multiply an amount by a rate (tax, tip, discount, share) and round to whole minor units.
+  - rounding: half_even (default) | half_up | floor | ceil | truncate.
+  - Returns: { ok, op, input, rate, rounding, exact_minor_units, result: {minor_units, currency, exponent, formatted} }.
+  - Backend: money-rs semantics, in-process (always available).
+
+- verify_webhook_hmac(scheme: string, secret: string, body: string, signature: string, prefix="", tolerance_seconds=300, timestamp?: int) -> object
+  - Constant-time verify an inbound webhook signature.
+  - scheme: stripe (t=..,v1=.. header, timestamped) | hex (bare hex HMAC) | base64.
+  - Returns: { ok, valid: bool, reason, scheme, ... }. reason on failure: empty_secret | missing_signature | malformed_signature | signature_mismatch | timestamp_outside_tolerance | unknown_scheme.
+  - Backend: webhook-hmac-verifier semantics, in-process (always available).
+
+## Error envelope
+
+Every tool returns JSON. On failure: { "ok": false, "error": { "code": string, "message": string, "detail"?: object } }.
+Common codes: tool_unavailable, bad_request, command_failed, invalid_json_output, timeout, exec_error, unknown_scheme.
+
+## Backend resolution (env overrides)
+
+- MAXED_MCP_STATEMENT_NORMALIZER  full command for statement-normalizer
+- MAXED_MCP_DOC_CLASSIFIER        full command for doc-classifier-kit
+- MAXED_MCP_OFXNORM               path/command for the ofxnorm binary
+- MAXED_MCP_CPA_WORKPAPER_VALIDATE full command for the spec validator
+- CPA_WORKPAPER_SPEC_DIR          a cpa-workpaper-spec checkout (validator default)
+
+## Notes
+
+- Deterministic: same input yields the same output. No network calls except a
+  shelled-out tool doing its own local work (the suite tools do not call out).
+- money and HMAC tools are pure and always available; the four parser/validator
+  tools need their sibling installed. Call list_capabilities to check.
