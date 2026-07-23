@@ -72,10 +72,17 @@ def _wrap_cli(code: int, out: str, err: str, ok_key: str) -> Dict[str, object]:
             return parsed
     except json.JSONDecodeError:
         pass
+
+    detail: Dict[str, object] = {"exit_code": code}
+    if out:
+        detail["stdout"] = runners.truncate_output(out)
+    if err:
+        detail["stderr"] = runners.truncate_output(err)
+
     return runners.error_envelope(
         "command_failed",
         runners.truncate_output(err) or f"command exited with status {code}",
-        exit_code=code,
+        **detail,
     )
 
 

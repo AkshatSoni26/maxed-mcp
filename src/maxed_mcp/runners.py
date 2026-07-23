@@ -189,11 +189,17 @@ def run_json(
         return error_envelope("exec_error", str(exc))
 
     out = out.strip()
-    if code != 0 and not out:
+    err = err.strip()
+    if code != 0:
+        detail: Dict[str, object] = {"exit_code": code}
+        if out:
+            detail["stdout"] = truncate_output(out)
+        if err:
+            detail["stderr"] = truncate_output(err)
         return error_envelope(
             "command_failed",
             (truncate_output(err) or f"command exited with status {code}"),
-            exit_code=code,
+            **detail,
         )
     try:
         parsed = json.loads(out) if out else {}
